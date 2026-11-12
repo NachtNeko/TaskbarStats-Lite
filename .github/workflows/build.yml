@@ -1,0 +1,60 @@
+name: build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: compile with built-in csc
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        shell: pwsh
+        run: |
+          Write-Host "Windows: $([Environment]::OSVersion.VersionString)"
+          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          if (Test-Path $csc) { Write-Host "csc found: $csc" } else { throw "csc.exe not found" }
+
+      - name: Build
+        shell: pwsh
+        run: ./build.ps1
+
+      - name: Smoke test (offline render dump)
+        shell: pwsh
+        run: ./build.ps1 -Probe
+
+      - name: Verify canvas metrics
+        shell: pwsh
+        run: |
+          $info = Get-Content canvas_info.txt -Raw
+          Write-Host $info
+          if ($info -notmatch 'ink coverage') { throw "self-check output missing" }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TaskbarStats-win-anycpu
+          path: TaskbarStats.exe
+          if-no-files-found: error
+
+      - name: Upload self-check images
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: self-check
+          path: |
+            canvas_preview.png
+            canvas_alpha.png
+            canvas_info.txt
+          if-no-files-found: warn
