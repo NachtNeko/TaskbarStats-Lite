@@ -39,7 +39,46 @@ jobs:
         run: |
           $info = Get-Content canvas_info.txt -Raw
           Write-Host $info
-          if ($info -notmatch 'ink coverage') { throw "self-check output missing" }
+
+          $problems = @()
+
+          # 1. 三种显示样式都要有自己的画布尺寸与墨水覆盖率
+          foreach ($style in 'number', 'ring', 'bar') {
+            if ($info -notmatch "(?m)^${style}: canvas=\d+x\d+\s+coverage=[\d.]+%") {
+              $problems += "缺少样式行: $style"
+            }
+          }
+
+          # 2. 关键字段必须在（注意 gpu 字段名含空格）
+          foreach ($key in 'dpi', 'font', 'cpu', 'ram', 'gpu', 'gpu pdh open') {
+            if ($info -notmatch "(?m)^${key} = \S") {
+              $problems += "缺少字段: $key"
+            }
+          }
+
+          # 3. 画布尺寸必须是正数，且环形样式应比数字样式窄（布局逻辑的基本体现）
+          $dims = @{}
+          foreach ($style in 'number', 'ring', 'bar') {
+            $m = [regex]::Match($info, "(?m)^${style}: canvas=(\d+)x(\d+)")
+            if ($m.Success) { $dims[$style] = @([int]$m.Groups[1].Value, [int]$m.Groups[2].Value) }
+          }
+          foreach ($style in $dims.Keys) {
+            if ($dims[$style][0] -le 0 -or $dims[$style][1] -le 0) {
+              $problems += "画布尺寸非法: $style = $($dims[$style][0])x$($dims[$style][1])"
+            }
+          }
+          if ($dims.ContainsKey('number') -and $dims.ContainsKey('ring')) {
+            if ($dims['ring'][0] -ge $dims['number'][0]) {
+              $problems += "环形样式应当比数字样式窄，实际 ring=$($dims['ring'][0]) number=$($dims['number'][0])"
+            }
+          }
+
+          if ($problems.Count -gt 0) {
+            $problems | ForEach-Object { Write-Host "::error::$_" }
+            throw "自检输出不完整，共 $($problems.Count) 项问题"
+          }
+
+          Write-Host "自检输出校验通过：三种样式 + 关键字段齐全"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
