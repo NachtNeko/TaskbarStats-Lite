@@ -51,6 +51,14 @@ $out = Join-Path $repoRoot 'TaskbarStats.exe'
 
 if (-not (Test-Path $src)) { throw "找不到源码：$src" }
 
+# DPI 感知清单：存在就嵌入，保证不被系统拉伸缩放（否则整块位图被放大，字会发虚）
+$manifest = Join-Path $repoRoot 'src\app.manifest'
+$manifestArg = @()
+if (Test-Path $manifest) {
+    $manifestArg = @("/win32manifest:$manifest")
+    Write-Host ("清单   : {0}" -f $manifest) -ForegroundColor DarkGray
+}
+
 Write-Host ("编译器 : {0}" -f $csc) -ForegroundColor DarkGray
 Write-Host ("源码   : {0}" -f $src) -ForegroundColor DarkGray
 
@@ -60,6 +68,7 @@ Write-Host ("源码   : {0}" -f $src) -ForegroundColor DarkGray
     "/r:$refDir\System.Drawing.dll" `
     "/r:$refDir\System.Windows.Forms.dll" `
     "/out:$out" `
+    $manifestArg `
     $src
 
 if ($LASTEXITCODE -ne 0) { throw "编译失败，退出码 $LASTEXITCODE" }

@@ -3,6 +3,32 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.0] - 2026-11-14
+
+### 修复
+
+- **小字号下文字发虚**（典型场景：100% 缩放的显示器，9pt≈12px）
+  透明画布上无法使用 ClearType，GDI+ 只能退回灰阶抗锯齿，12px 时明显发虚。
+  改为「ClearType 遮罩转 alpha」：在不透明黑底上用 `ClearTypeGridFit` 画白字拿到
+  次像素定位与 hinting 结果，取亮度作覆盖率 alpha，再用真正的 ink 颜色写回透明画布。
+  实测 96dpi 下墨水覆盖率 3.1% → 3.5%，笔画明显变实。
+
+### 新增
+
+- **内嵌 DPI 感知清单** `src/app.manifest`（`permonitorv2,permonitor`）。
+  运行时调 `SetProcessDpiAwarenessContext` 失败或被兼容性设置覆盖时，
+  清单在进程启动前就生效，从根上避免「整块位图被系统拉伸 ⇒ 字发虚」。
+- **`--info` 诊断模式**：输出 DPI、缩放比例、DPI 感知状态、任务栏矩形、字体度量、
+  各样式画布尺寸，用于在出问题的机器上取证。
+- `--dump <base> [dpi]` 支持第三个参数强制指定 DPI，便于对比 100%/125%/150% 下的清晰度。
+
+### 变更
+
+- 文字基线改为对齐整数像素（`Math.Round((winH - lineH) / 2)`），
+  不再依赖 `LineAlignment.Center`（在非整数行高上会引入 0.5px 偏移）。
+- `PixelOffsetMode` 由 `Half` 改为 `None`，字形不再跨像素采样。
+- 环形/长条与文字分两趟绘制，文字统一走遮罩通道。
+
 ## [1.1.0] - 2026-11-12
 
 ### 新增

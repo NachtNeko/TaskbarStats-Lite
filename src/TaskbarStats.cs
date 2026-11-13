@@ -158,6 +158,15 @@ namespace TaskbarStats
         [DllImport("user32.dll")]
         public static extern int GetDpiForWindow(IntPtr hwnd);
 
+        [DllImport("user32.dll")]
+        public static extern int GetDpiForSystem();
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetThreadDpiAwarenessContext();
+
+        [DllImport("user32.dll")]
+        public static extern int GetAwarenessFromDpiAwarenessContext(IntPtr value);
+
         [DllImport("user32.dll", SetLastError = true)]
         public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
 
@@ -231,10 +240,12 @@ namespace TaskbarStats
 
         // ---- 绘制 ----
         private Bitmap canvas;
+        private Bitmap textMask;
         private Font font;
         private int dpi = 96;
         private int winW, winH;
-        private float padX, gap, bigGap, labelW, gaugeW, vOffset, emPx;
+        private float padX, gap, bigGap, labelW, gaugeW, emPx, lineH, textTop;
+        private int dpiOverride;      // 仅自检用：强制按指定 DPI 渲染，便于对比不同缩放下的清晰度
         private bool lightTaskbar;
 
         // ---- 窗口位置状态 ----
@@ -537,6 +548,8 @@ namespace TaskbarStats
             }
             catch (Exception) { }
 
+            if (dpiOverride > 0) dpi = dpiOverride;
+
             float scale = dpi / 96f;
 
             if (font != null) { font.Dispose(); font = null; }
@@ -545,7 +558,6 @@ namespace TaskbarStats
             padX = 8f * scale;
             gap = 4f * scale;
             bigGap = 11f * scale;
-            vOffset = 0f;   // 实测 LineAlignment.Center 已把字形盒子摆正
 
             float measuredLabel, measuredValue, heightLocal;
             using (Bitmap probe = new Bitmap(8, 8, PixelFormat.Format32bppArgb))
@@ -565,6 +577,7 @@ namespace TaskbarStats
                         measuredValue = g.MeasureString("100%", font, PointF.Empty, sf).Width;
                         heightLocal = g.MeasureString("Ag100%", font, PointF.Empty, sf).Height;
                     }
+                    lineH = font.GetHeight(g);
                 }
             }
 
@@ -599,6 +612,9 @@ namespace TaskbarStats
             }
             winW = contentW;
             winH = contentH;
+
+            // 文字整体对齐到整数像素：小字号下 0.5px 的偏移就是"发虚"的元凶
+            textTop = (float)Math.Round((winH - lineH) / 2f);
 
             if (resizeWindow)
             {
@@ -640,53 +656,141 @@ namespace TaskbarStats
                 canvas.SetResolution(dpi, dpi);
             }
 
+            Color ink = lightTaskbar
+                ? Color.FromArgb(235, 24, 24, 28)
+                : Color.FromArgb(242, 255, 255, 255);
+
             using (Graphics g = Graphics.FromImage(canvas))
             {
                 g.Clear(Color.Transparent);
                 g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
                 g.SmoothingMode = SmoothingMode.AntiAlias;
-                g.PixelOffsetMode = PixelOffsetMode.Half;
+                g.PixelOffsetMode = PixelOffsetMode.None;
                 g.CompositingMode = CompositingMode.SourceOver;
 
-                Color ink = lightTaskbar
-                    ? Color.FromArgb(235, 24, 24, 28)
-                    : Color.FromArgb(242, 255, 255, 255);
-
+                // 先算出每个单元格的位置，两趟绘制共用（形状一趟、文字一趟）
+                float[] labelX = new float[MetricCount];
+                float[] gaugeX = new float[MetricCount];
                 float x = padX;
-                using (SolidBrush brush = new SolidBrush(ink))
+                for (int i = 0; i < MetricCount; i++)
+                {
+                    labelX[i] = x;
+                    x += labelW + gap;
+                    gaugeX[i] = x;
+                    x += gaugeW;
+                    if (i < MetricCount - 1) x += bigGap;
+                }
+
+                // 第一趟：只在画布上画环形/长条（矢量图形，抗锯齿即可）
+                if (style != GaugeStyle.Number)
                 {
                     for (int i = 0; i < MetricCount; i++)
                     {
-                        DrawText(g, brush, Labels[i], x, labelW);
-                        x += labelW + gap;
-
-                        DrawGauge(g, ink, brush, i, x);
-                        x += gaugeW;
-                        if (i < MetricCount - 1) x += bigGap;
+                        if (style == GaugeStyle.Ring) DrawRing(g, ink, gaugeX[i], gaugeW, values[i], valid[i]);
+                        else DrawBar(g, ink, gaugeX[i], gaugeW, values[i], valid[i]);
                     }
                 }
             }
+
+            // 第二趟：文字走"ClearType 遮罩 -> alpha"通道，小字号下比灰阶抗锯齿实得多
+            RenderTextMask(ink);
 
             Premultiply(canvas);
             PushToWindow();
         }
 
-        private void DrawGauge(Graphics g, Color ink, Brush brush, int index, float x)
+        // ------------------------------------------------------------------
+        // 小字号清晰度的关键：
+        //   透明画布上无法直接用 ClearType（它要求不透明底色）。做法是
+        //   1) 在纯黑不透明位图上用 ClearTypeGridFit 画白字 —— 拿到微软的
+        //      次像素定位 + hinting + gamma 校正结果；
+        //   2) 取每个像素亮度作为覆盖率 alpha，丢掉 ClearType 的子像素彩色；
+        //   3) 用真正要用的 ink 颜色按这个 alpha 写回透明画布。
+        //   12px 这种小字号下，比 GDI+ 的灰阶 AntiAliasGridFit 明显更锐。
+        // ------------------------------------------------------------------
+        private void RenderTextMask(Color ink)
         {
-            double value = values[index];
-            bool ok = valid[index];
-
-            switch (style)
+            if (textMask == null || textMask.Width != winW || textMask.Height != winH)
             {
-                case GaugeStyle.Ring:
-                    DrawRing(g, ink, x, gaugeW, value, ok);
-                    break;
-                case GaugeStyle.Bar:
-                    DrawBar(g, ink, x, gaugeW, value, ok);
-                    break;
-                default:
-                    DrawText(g, brush, FormatPercent(value, ok), x, gaugeW);
-                    break;
+                if (textMask != null) textMask.Dispose();
+                textMask = new Bitmap(winW, winH, PixelFormat.Format32bppRgb);
+                textMask.SetResolution(dpi, dpi);
+            }
+
+            float[] labelX = new float[MetricCount];
+            float[] gaugeX = new float[MetricCount];
+            float x = padX;
+            for (int i = 0; i < MetricCount; i++)
+            {
+                labelX[i] = x;
+                x += labelW + gap;
+                gaugeX[i] = x;
+                x += gaugeW;
+                if (i < MetricCount - 1) x += bigGap;
+            }
+
+            using (Graphics tg = Graphics.FromImage(textMask))
+            {
+                tg.Clear(Color.Black);
+                tg.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+                tg.TextContrast = 5;
+                tg.SmoothingMode = SmoothingMode.None;
+                tg.PixelOffsetMode = PixelOffsetMode.None;
+
+                using (SolidBrush white = new SolidBrush(Color.White))
+                {
+                    for (int i = 0; i < MetricCount; i++)
+                    {
+                        DrawText(tg, white, Labels[i], labelX[i], labelW);
+                        if (style == GaugeStyle.Number)
+                        {
+                            DrawText(tg, white, FormatPercent(values[i], valid[i]), gaugeX[i], gaugeW);
+                        }
+                    }
+                }
+            }
+
+            CompositeMaskAsAlpha(ink);
+        }
+
+        private void CompositeMaskAsAlpha(Color ink)
+        {
+            Rectangle rect = new Rectangle(0, 0, winW, winH);
+            BitmapData md = textMask.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppRgb);
+            BitmapData cd = canvas.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
+            try
+            {
+                int[] maskRow = new int[winW];
+                int[] canvasRow = new int[winW];
+                int rgb = (ink.R << 16) | (ink.G << 8) | ink.B;
+
+                for (int y = 0; y < winH; y++)
+                {
+                    IntPtr mSrc = new IntPtr(md.Scan0.ToInt64() + (long)y * md.Stride);
+                    IntPtr cSrc = new IntPtr(cd.Scan0.ToInt64() + (long)y * cd.Stride);
+                    Marshal.Copy(mSrc, maskRow, 0, winW);
+                    Marshal.Copy(cSrc, canvasRow, 0, winW);
+
+                    for (int x = 0; x < winW; x++)
+                    {
+                        int v = maskRow[x];
+                        int r = (v >> 16) & 0xFF;
+                        int g = (v >> 8) & 0xFF;
+                        int b = v & 0xFF;
+                        int luma = (r * 30 + g * 59 + b * 11) / 100;
+                        if (luma <= 2) continue;              // 没有字迹，保留画布原有像素
+                        if (luma > 255) luma = 255;
+                        int a = luma * ink.A / 255;
+                        canvasRow[x] = (a << 24) | rgb;
+                    }
+
+                    Marshal.Copy(canvasRow, 0, cSrc, winW);
+                }
+            }
+            finally
+            {
+                textMask.UnlockBits(md);
+                canvas.UnlockBits(cd);
             }
         }
 
@@ -704,8 +808,8 @@ namespace TaskbarStats
             using (StringFormat sf = TypographicFormat())
             {
                 sf.Alignment = StringAlignment.Near;
-                sf.LineAlignment = StringAlignment.Center;
-                RectangleF box = new RectangleF(x, vOffset, w, winH);
+                sf.LineAlignment = StringAlignment.Near;   // 自己按整数像素定位，Center 会引入 .5 偏移
+                RectangleF box = new RectangleF(x, textTop, w, lineH);
                 g.DrawString(text, font, brush, box, sf);
             }
         }
@@ -1341,12 +1445,69 @@ namespace TaskbarStats
             return bmp;
         }
 
+        public void SetDpiOverride(int value)
+        {
+            dpiOverride = value;
+        }
+
+        // ------------------------------------------------------------------
+        // 诊断模式：把影响清晰度的关键参数全部打印出来，便于在出问题的机器上取证
+        // ------------------------------------------------------------------
+        public void DumpInfo(string basePath)
+        {
+            Sample();
+            RebuildLayout(true);
+
+            int awareness = -1;
+            int systemDpi = 0;
+            try
+            {
+                awareness = Native.GetAwarenessFromDpiAwarenessContext(Native.GetThreadDpiAwarenessContext());
+                systemDpi = Native.GetDpiForSystem();
+            }
+            catch (Exception) { }
+
+            string awarenessText;
+            if (awareness == 2) awarenessText = "PerMonitorAware";
+            else if (awareness == 1) awarenessText = "SystemAware";
+            else if (awareness == 0) awarenessText = "Unaware  (会被系统拉伸 => 字会发虚)";
+            else awarenessText = "unknown(" + awareness + ")";
+
+            StringBuilder sb = new StringBuilder();
+            sb.AppendLine("os            = " + Environment.OSVersion.VersionString);
+            sb.AppendLine("64bit process = " + (IntPtr.Size == 8));
+            sb.AppendLine("dpi (window)  = " + dpi + "    scale = " + (dpi / 96.0).ToString("0.###", CultureInfo.InvariantCulture) + "x");
+            sb.AppendLine("dpi (system)  = " + systemDpi);
+            sb.AppendLine("dpi awareness = " + awarenessText);
+            sb.AppendLine("taskbar rect  = " + (hasTray ? trayRect.ToString() : "<none>"));
+            sb.AppendLine("taskbar height= " + (hasTray ? trayRect.Height.ToString(CultureInfo.InvariantCulture) : "n/a"));
+            sb.AppendLine("font          = " + font.Name + "  " + font.SizeInPoints.ToString("0.#", CultureInfo.InvariantCulture) + "pt  emPx=" + emPx.ToString("0.##", CultureInfo.InvariantCulture) + "  lineH=" + lineH.ToString("0.##", CultureInfo.InvariantCulture));
+            sb.AppendLine("textTop       = " + textTop.ToString("0.##", CultureInfo.InvariantCulture) + "   (整数才代表基线对齐到像素)");
+            sb.AppendLine("padX/gap/bigGap = " + padX.ToString("0.##", CultureInfo.InvariantCulture) + " / " + gap.ToString("0.##", CultureInfo.InvariantCulture) + " / " + bigGap.ToString("0.##", CultureInfo.InvariantCulture));
+
+            for (int s = 0; s < 3; s++)
+            {
+                style = (GaugeStyle)s;
+                RebuildLayout(true);
+                sb.AppendLine(StyleKey((GaugeStyle)s) + " canvas  = " + winW + "x" + winH + "   仪表宽度=" + gaugeW.ToString("0.##", CultureInfo.InvariantCulture));
+            }
+            style = GaugeStyle.Number;
+            RebuildLayout(true);
+
+            sb.AppendLine("cpu/ram/gpu   = " + values[0].ToString("0.#", CultureInfo.InvariantCulture) + " / " + values[1].ToString("0.#", CultureInfo.InvariantCulture) + " / " + (valid[2] ? values[2].ToString("0.#", CultureInfo.InvariantCulture) : "n/a"));
+
+            Console.WriteLine(sb.ToString());
+            try { File.WriteAllText(basePath + "_diag.txt", sb.ToString()); }
+            catch (Exception) { }
+        }
+
         protected override void Dispose(bool disposing)
         {
             if (disposing)
             {
                 if (timer != null) { timer.Stop(); timer.Dispose(); timer = null; }
                 if (canvas != null) { canvas.Dispose(); canvas = null; }
+                if (textMask != null) { textMask.Dispose(); textMask = null; }
                 if (font != null) { font.Dispose(); font = null; }
 
                 if (gpuQueryOpen)
@@ -1379,13 +1540,20 @@ namespace TaskbarStats
             }
             catch (Exception) { }
 
-            if (args != null && args.Length > 0 && args[0] == "--dump")
+            if (args != null && args.Length > 0 && (args[0] == "--dump" || args[0] == "--info"))
             {
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
+
+                string basePath = args.Length > 1 ? args[1] : "canvas";
+                int forcedDpi = 0;
+                if (args.Length > 2) int.TryParse(args[2], out forcedDpi);
+
                 using (Widget probe = new Widget(true))
                 {
-                    probe.DumpPreview(args.Length > 1 ? args[1] : "canvas");
+                    probe.SetDpiOverride(forcedDpi);
+                    if (args[0] == "--info") probe.DumpInfo(basePath);
+                    else probe.DumpPreview(basePath);
                 }
                 return;
             }

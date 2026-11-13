@@ -183,7 +183,8 @@ TaskbarStats/
 │       └── build.yml        # CI：windows-latest 上编译并自检
 ├── build.ps1                # 编译脚本（-Run / -Startup / -Probe）
 ├── src/
-│   └── TaskbarStats.cs      # 全部源码，单文件
+│   ├── TaskbarStats.cs      # 全部源码，单文件
+│   └── app.manifest         # DPI 感知清单（permonitorv2），编译时内嵌
 ├── tools/
 │   └── Probe.cs             # 开发期验证探针（窗口几何 / 抓屏差分）
 ├── docs/
@@ -224,6 +225,36 @@ C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /optimize
 
 几乎都是**已经有一个实例在运行**——程序用互斥锁保证单实例，第二个会静默退出。
 先退出旧实例：在任务栏指标上**右键 → 退出**，或任务管理器里结束 `TaskbarStats.exe`，再启动。
+</details>
+
+<details>
+<summary><b>换到另一台电脑后字体发虚？</b></summary>
+
+透明画布上没法用 ClearType，只能灰阶抗锯齿。9pt 在 **100% 缩放**下只有 12px，
+笔画会显得发灰 —— 这是物理限制。
+
+v1.2.0 起已经改成「ClearType 遮罩转 alpha」：先用 ClearType 在不透明黑底上渲染拿到
+次像素定位和 hinting，再把亮度当作 alpha 用真正的颜色合成，小字号明显变实。
+同时内嵌 `app.manifest` 声明 DPI 感知，避免被系统拉伸放大。
+
+如果仍然发虚，先在新机器上跑诊断，把输出发我：
+
+```powershell
+TaskbarStats.exe --info diag
+notepad diag_diag.txt
+```
+
+重点看两行：
+
+- `dpi awareness = Unaware` ⇒ 被系统拉伸了，说明清单没生效（检查是否用的旧 exe）
+- `dpi (window) = 96` **且** 实际系统缩放不是 100% ⇒ 同上
+
+对比不同缩放下的渲染效果：
+
+```powershell
+TaskbarStats.exe --dump shot 96     # 模拟 100%
+TaskbarStats.exe --dump shot 144    # 模拟 150%
+```
 </details>
 
 <details>
