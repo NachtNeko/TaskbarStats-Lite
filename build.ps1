@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    编译 TaskbarStats —— 只用 Windows 自带的 .NET Framework 编译器。
+    编译 TaskbarStats-Lite —— 只用 Windows 自带的 .NET Framework 编译器。
 
 .DESCRIPTION
     不需要安装 .NET SDK 或 Visual Studio。脚本会自动寻找
