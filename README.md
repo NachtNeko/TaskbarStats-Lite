@@ -42,15 +42,15 @@
 
 | | |
 |---|---|
-| 🪟 **真正的透明** | 分层窗口 + `UpdateLayeredWindow` 逐像素 alpha，不是色键抠图，边缘无毛边、无黑底 |
-| 📊 **三种显示样式** | 数字百分比 / 环形进度条 / 长条进度条，右键菜单随时切换，选择会被记住 |
-| 🎮 **含 GPU 占用率** | 通过 Windows 自带的 PDH 性能计数器读 `GPU Engine`，跨厂商通用，不需要装驱动 SDK |
-| ⚡ **几乎零开销** | 12 秒常驻实测累计消耗 **0.02 秒 CPU**（约 0.17% 单核），内存约 40MB |
-| 📐 **自动跟随任务栏** | 每秒重读 `Shell_TrayWnd` 矩形；任务栏高度、位置、DPI 缩放、深浅主题变化都能跟上 |
-| 🙈 **不打扰** | `WS_EX_TOOLWINDOW` + `WS_EX_NOACTIVATE`，不占任务栏按钮、不进 Alt+Tab、点击不抢焦点 |
-| 🎨 **主题自适应** | 读 `SystemUsesLightTheme`，浅色任务栏自动换深色描边 |
-| 📦 **零依赖** | 编译只用 Windows 自带 csc，不装 SDK；运行只要 .NET Framework 4.x（Win10/11 自带） |
-| 🖱️ **可拖动** | 左键拖动调位置，位置持久化；右键菜单可开机自启、重置、退出 |
+| **真正的透明** | 分层窗口 + `UpdateLayeredWindow` 逐像素 alpha，不是色键抠图，边缘无毛边、无黑底 |
+| **三种显示样式** | 数字百分比 / 环形进度条 / 长条进度条，右键菜单随时切换，选择会被记住 |
+| **含 GPU 占用率** | 通过 Windows 自带的 PDH 性能计数器读 `GPU Engine`，跨厂商通用，不需要装驱动 SDK |
+| **几乎零开销** | 12 秒常驻实测累计消耗 **0.02 秒 CPU**（约 0.17% 单核），内存约 40MB |
+| **自动跟随任务栏** | 每秒重读 `Shell_TrayWnd` 矩形；任务栏高度、位置、DPI 缩放、深浅主题变化都能跟上 |
+| **不打扰** | `WS_EX_TOOLWINDOW` + `WS_EX_NOACTIVATE`，不占任务栏按钮、不进 Alt+Tab、点击不抢焦点 |
+| **主题自适应** | 读 `SystemUsesLightTheme`，浅色任务栏自动换深色描边 |
+| **零依赖** | 编译只用 Windows 自带 csc，不装 SDK；运行只要 .NET Framework 4.x（Win10/11 自带） |
+| **可拖动** | 左键拖动调位置，位置持久化；右键菜单可开机自启、重置、退出 |
 
 ## 系统要求
 
@@ -233,7 +233,7 @@ C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /optimize
 透明画布上没法用 ClearType，只能灰阶抗锯齿。9pt 在 **100% 缩放**下只有 12px，
 笔画会显得发灰 —— 这是物理限制。
 
-v1.2.0 起已经改成「ClearType 遮罩转 alpha」：先用 ClearType 在不透明黑底上渲染拿到
+本项目采用「ClearType 遮罩转 alpha」的渲染方案：先用 ClearType 在不透明黑底上渲染拿到
 次像素定位和 hinting，再把亮度当作 alpha 用真正的颜色合成，小字号明显变实。
 同时内嵌 `app.manifest` 声明 DPI 感知，避免被系统拉伸放大。
 
