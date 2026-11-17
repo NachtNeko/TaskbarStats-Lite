@@ -1,10 +1,10 @@
-// TaskbarStats - Win11 任务栏 CPU / RAM / GPU 实时监视
+// TaskbarStats-Lite - Win11 任务栏 CPU / RAM / GPU 实时监视
 //
 // 极简风格：无窗口边框、无背景色块，只有文字/图形直接嵌在任务栏上。
 //
 // 编译（无需安装任何 SDK，用 Windows 自带 csc）：
 //   C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /optimize+ ^
-//     /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll TaskbarStats.cs
+//     /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll TaskbarStats-Lite.cs
 //
 // 实现要点：
 //   1. 分层窗口 (WS_EX_LAYERED) + UpdateLayeredWindow 逐像素 alpha —— 真正透明，
@@ -32,7 +32,7 @@ using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
-namespace TaskbarStats
+namespace TaskbarStatsLite
 {
     /// <summary>占用率显示样式。</summary>
     internal enum GaugeStyle
@@ -49,14 +49,17 @@ namespace TaskbarStats
     internal static class Build
     {
 #if TSB_TEST
-        public const string InstanceName = @"Local\TaskbarStats.TestInstance";
-        public const string SettingsFolder = "TaskbarStatsTest";
+        public const string InstanceName = @"Local\TaskbarStats-Lite.TestInstance";
+        public const string SettingsFolder = "TaskbarStats-LiteTest";
         public static readonly bool PortableSettings = true;
 #else
-        public const string InstanceName = @"Local\TaskbarStats.SingleInstance";
-        public const string SettingsFolder = "TaskbarStats";
+        public const string InstanceName = @"Local\TaskbarStats-Lite.SingleInstance";
+        public const string SettingsFolder = "TaskbarStats-Lite";
         public static readonly bool PortableSettings = false;
 #endif
+
+        /// <summary>改名前的配置目录，仅用于把旧设置迁移过来。</summary>
+        public const string LegacySettingsFolder = "TaskbarStats";
     }
 
     internal static class Native
@@ -148,6 +151,12 @@ namespace TaskbarStats
 
         [DllImport("user32.dll", SetLastError = true)]
         public static extern bool GetCursorPos(out POINT lpPoint);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr SetCapture(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        public static extern bool ReleaseCapture();
 
         [DllImport("user32.dll")]
         public static extern IntPtr GetDC(IntPtr hWnd);
@@ -299,7 +308,7 @@ namespace TaskbarStats
             MinimizeBox = false;
             MaximizeBox = false;
             ControlBox = false;
-            Text = "TaskbarStats";
+            Text = "TaskbarStats-Lite";
 
             LoadSettings();
 
@@ -668,6 +677,17 @@ namespace TaskbarStats
                 g.PixelOffsetMode = PixelOffsetMode.None;
                 g.CompositingMode = CompositingMode.SourceOver;
 
+                // 关键修复：分层窗口里 alpha=0 的像素会被 Windows 判定为"透明"，
+                // 鼠标事件直接穿透到下层（任务栏）。我们的字形覆盖率只有 ~5%，
+                // 所以点文字周围的空白处，事件全落到任务栏上了 —— 表现为
+                // "左键很难拖、右键老是弹出任务栏菜单"。
+                // 给整块矩形铺一层 alpha=1 的极淡底色：肉眼看不出，
+                // 但 alpha 不再是 0，整个矩形从此都能接收鼠标。
+                using (SolidBrush hitArea = new SolidBrush(Color.FromArgb(1, ink)))
+                {
+                    g.FillRectangle(hitArea, 0, 0, winW, winH);
+                }
+
                 // 先算出每个单元格的位置，两趟绘制共用（形状一趟、文字一趟）
                 float[] labelX = new float[MetricCount];
                 float[] gaugeX = new float[MetricCount];
@@ -953,6 +973,15 @@ namespace TaskbarStats
             }
         }
 
+        // 只移动分层窗口（系统会把已有位图一起搬过去）。拖动时用它代替 PushToWindow。
+        private void ApplyPosition()
+        {
+            if (headless) return;
+            if (!IsHandleCreated) return;
+            Native.SetWindowPos(Handle, Native.HWND_TOPMOST, winX, winY, winW, winH,
+                Native.SWP_NOACTIVATE);
+        }
+
         // ------------------------------------------------------------------
         // 把 ARGB 位图逐像素贴到分层窗口上（这一步是"没有黑框"的关键）
         // ------------------------------------------------------------------
@@ -1053,12 +1082,16 @@ namespace TaskbarStats
 
                 case Native.WM_LBUTTONDOWN:
                     {
+                        // 必须用绝对屏幕坐标（GetCursorPos），不能用消息里的客户区坐标：
+                        // 窗口本身跟着光标移动，客户区坐标会自我叠加，越拖越偏
                         Native.POINT p;
                         if (Native.GetCursorPos(out p))
                         {
                             dragging = true;
                             dragStartCursorX = p.X;
                             dragOriginOffset = offsetX;
+                            // 捕获鼠标：即使光标跑出窗口（拖快了、往上飘了）也能继续收到移动
+                            Native.SetCapture(Handle);
                         }
                         Cursor = Cursors.SizeWE;
                         return;
@@ -1072,7 +1105,9 @@ namespace TaskbarStats
                         {
                             offsetX = dragOriginOffset + (p.X - dragStartCursorX);
                             Reposition();
-                            PushToWindow();
+                            // 只挪窗口，不重贴位图 —— 重贴要建 DC、取 HBITMAP，
+                            // 每帧做一次就是拖动卡顿的根因
+                            ApplyPosition();
                         }
                         return;
                     }
@@ -1082,8 +1117,10 @@ namespace TaskbarStats
                     if (dragging)
                     {
                         dragging = false;
+                        Native.ReleaseCapture();
                         Cursor = Cursors.Default;
                         SaveSettings();
+                        Render();          // 拖动结束补一次完整贴图
                         return;
                     }
                     break;
@@ -1111,12 +1148,31 @@ namespace TaskbarStats
 
             menu.Items.Add(new ToolStripSeparator());
 
-            ToolStripMenuItem auto = new ToolStripMenuItem("开机自动启动");
-            auto.Checked = AutoStartEnabled();
-            auto.Click += delegate
+            // --- 开机自动启动：菜单里直接写出真实状态，点完还会弹窗确认 ---
+            string autoTarget = AutoStartTarget();
+            bool autoOn = autoTarget != null;
+            bool autoPointsHere = autoOn && string.Equals(autoTarget,
+                Application.ExecutablePath, StringComparison.OrdinalIgnoreCase);
+
+            string autoLabel;
+            if (!autoOn)
             {
-                SetAutoStart(!AutoStartEnabled());
-            };
+                autoLabel = "开机自动启动：已关闭（点击开启）";
+            }
+            else if (autoPointsHere)
+            {
+                autoLabel = "开机自动启动：已开启（点击关闭）";
+            }
+            else
+            {
+                autoLabel = "开机自动启动：已开启，但指向 "
+                          + (string.IsNullOrEmpty(autoTarget) ? "其他程序" : Path.GetFileName(autoTarget))
+                          + "（点击修正）";
+            }
+
+            ToolStripMenuItem auto = new ToolStripMenuItem(autoLabel);
+            auto.Checked = autoOn;
+            auto.Click += delegate { ToggleAutoStart(); };
             menu.Items.Add(auto);
 
             ToolStripMenuItem reset = new ToolStripMenuItem("重置到最左侧");
@@ -1178,10 +1234,31 @@ namespace TaskbarStats
             return Path.Combine(dir, "settings.ini");
         }
 
+        /// <summary>改名后首次运行：把旧目录里的设置搬过来，避免丢失位置与样式。</summary>
+        private static void MigrateLegacySettings()
+        {
+            try
+            {
+                if (Build.PortableSettings) return;
+
+                string current = SettingsPath();
+                if (File.Exists(current)) return;
+
+                string legacy = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    Build.LegacySettingsFolder, "settings.ini");
+                if (!File.Exists(legacy)) return;
+
+                File.Copy(legacy, current, false);
+            }
+            catch (Exception) { }
+        }
+
         private void LoadSettings()
         {
             offsetX = 0;
             style = GaugeStyle.Number;
+            MigrateLegacySettings();
             try
             {
                 string path = SettingsPath();
@@ -1236,7 +1313,7 @@ namespace TaskbarStats
             try
             {
                 string dir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TaskbarStats");
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), Build.SettingsFolder);
                 Directory.CreateDirectory(dir);
                 string path = Path.Combine(dir, "error.log");
                 if (File.Exists(path) && new FileInfo(path).Length > 65536) return;
@@ -1273,7 +1350,7 @@ namespace TaskbarStats
         {
             return Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.Startup),
-                "TaskbarStats.lnk");
+                "TaskbarStats-Lite.lnk");
         }
 
         private static bool AutoStartEnabled()
@@ -1282,19 +1359,45 @@ namespace TaskbarStats
             catch (Exception) { return false; }
         }
 
-        private static void SetAutoStart(bool enable)
+        /// <summary>读启动项真正的目标路径；不存在返回 null。</summary>
+        private static string AutoStartTarget()
         {
+            try
+            {
+                string link = StartupShortcutPath();
+                if (!File.Exists(link)) return null;
+
+                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+                if (shellType == null) return string.Empty;
+                object shell = Activator.CreateInstance(shellType);
+                object shortcut = shellType.InvokeMember("CreateShortcut",
+                    BindingFlags.InvokeMethod, null, shell, new object[] { link });
+                object target = shortcut.GetType().InvokeMember("TargetPath",
+                    BindingFlags.GetProperty, null, shortcut, null);
+                return target as string;
+            }
+            catch (Exception) { return null; }
+        }
+
+        /// <summary>设置开机自启。返回是否执行成功；失败时 error 带原因（不再静默吞掉）。</summary>
+        private static bool SetAutoStart(bool enable, out string error)
+        {
+            error = null;
             try
             {
                 string link = StartupShortcutPath();
                 if (!enable)
                 {
                     if (File.Exists(link)) File.Delete(link);
-                    return;
+                    return true;
                 }
 
                 Type shellType = Type.GetTypeFromProgID("WScript.Shell");
-                if (shellType == null) return;
+                if (shellType == null)
+                {
+                    error = "系统里找不到 WScript.Shell 组件";
+                    return false;
+                }
                 object shell = Activator.CreateInstance(shellType);
                 object shortcut = shellType.InvokeMember("CreateShortcut",
                     BindingFlags.InvokeMethod, null, shell, new object[] { link });
@@ -1306,8 +1409,93 @@ namespace TaskbarStats
                 st.InvokeMember("Description", BindingFlags.SetProperty, null, shortcut,
                     new object[] { "任务栏 CPU / RAM / GPU 实时监视" });
                 st.InvokeMember("Save", BindingFlags.InvokeMethod, null, shortcut, null);
+                return true;
             }
+            catch (Exception ex)
+            {
+                // COM 反射调用会把真实原因裹在 TargetInvocationException 里，
+                // 剥出来才是有意义的提示（例如"拒绝访问"）
+                Exception inner = ex;
+                while (inner is TargetInvocationException && inner.InnerException != null)
+                {
+                    inner = inner.InnerException;
+                }
+                error = inner.Message;
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 命令行版开机自启管理：--autostart status|on|off
+        /// 不走 GUI、不弹窗，直接打印磁盘上的真实状态，便于脚本化和排查。
+        /// </summary>
+        public static void RunAutoStartCli(string action, string prefix)
+        {
+            string result = "未执行（仅查询）";
+            string error = null;
+
+            if (action == "on" || action == "off")
+            {
+                bool ok = SetAutoStart(action == "on", out error);
+                if (ok) result = (action == "on") ? "已开启" : "已关闭";
+                else result = "失败：" + (string.IsNullOrEmpty(error) ? "未知原因" : error);
+            }
+
+            string target = AutoStartTarget();
+
+            StringBuilder sb = new StringBuilder();
+            sb.AppendLine("启动项路径   = " + StartupShortcutPath());
+            sb.AppendLine("是否存在     = " + (target != null));
+            sb.AppendLine("指向目标     = " + (target == null ? "<无>" : target));
+            sb.AppendLine("当前程序     = " + Application.ExecutablePath);
+            sb.AppendLine("目标是否匹配 = " + (target != null && string.Equals(target,
+                Application.ExecutablePath, StringComparison.OrdinalIgnoreCase)));
+            sb.AppendLine("操作结果     = " + result);
+
+            Console.WriteLine(sb.ToString());
+            try { File.WriteAllText(prefix + "_autostart.txt", sb.ToString()); }
             catch (Exception) { }
+        }
+
+        /// <summary>切换开机自启，并回读真实状态后弹窗告知结果。</summary>
+        private void ToggleAutoStart()
+        {
+            string before = AutoStartTarget();
+            bool wasOn = before != null;
+            bool pointedHere = wasOn && string.Equals(before, Application.ExecutablePath,
+                StringComparison.OrdinalIgnoreCase);
+
+            // 已开启且指向自己 -> 关闭；未开启 / 指向别的程序 -> 开启并修正目标
+            bool wantEnable = !pointedHere;
+
+            string error;
+            bool invoked = SetAutoStart(wantEnable, out error);
+
+            // 不信返回值，回读磁盘上的真实状态
+            string after = AutoStartTarget();
+            bool nowOn = after != null;
+            bool nowHere = nowOn && string.Equals(after, Application.ExecutablePath,
+                StringComparison.OrdinalIgnoreCase);
+            bool success = wantEnable ? nowHere : !nowOn;
+
+            string msg;
+            if (success)
+            {
+                msg = wantEnable
+                    ? "✅ 已开启开机自动启动。\r\n\r\n启动项：" + StartupShortcutPath()
+                    : "✅ 已关闭开机自动启动。";
+            }
+            else
+            {
+                msg = "⚠ 操作没有生效，开机启动状态保持不变。\r\n\r\n";
+                if (!invoked && !string.IsNullOrEmpty(error)) msg += "失败原因：" + error + "\r\n\r\n";
+                msg += "当前状态：" + (nowOn ? (nowHere ? "已开启" : "已开启（指向其他程序）") : "已关闭") + "\r\n";
+                msg += "启动项路径：" + StartupShortcutPath();
+            }
+
+            MessageBox.Show(this, msg, "TaskbarStats-Lite · 开机启动",
+                MessageBoxButtons.OK,
+                success ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
         }
 
         // ------------------------------------------------------------------
@@ -1555,6 +1743,14 @@ namespace TaskbarStats
                     if (args[0] == "--info") probe.DumpInfo(basePath);
                     else probe.DumpPreview(basePath);
                 }
+                return;
+            }
+
+            if (args != null && args.Length > 0 && args[0] == "--autostart")
+            {
+                Widget.RunAutoStartCli(
+                    args.Length > 1 ? args[1] : "status",
+                    args.Length > 2 ? args[2] : "autostart");
                 return;
             }
 

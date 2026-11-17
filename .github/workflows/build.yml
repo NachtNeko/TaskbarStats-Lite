@@ -83,8 +83,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TaskbarStats-win-anycpu
-          path: TaskbarStats.exe
+          name: TaskbarStats-Lite-win-anycpu
+          path: TaskbarStats-Lite.exe
           if-no-files-found: error
 
       - name: Upload self-check images

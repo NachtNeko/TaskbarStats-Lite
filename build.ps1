@@ -46,8 +46,8 @@ if (-not $candidates) {
 $csc = @($candidates)[0]
 $refDir = Split-Path -Parent $csc
 
-$src = Join-Path $repoRoot 'src\TaskbarStats.cs'
-$out = Join-Path $repoRoot 'TaskbarStats.exe'
+$src = Join-Path $repoRoot 'src\TaskbarStats-Lite.cs'
+$out = Join-Path $repoRoot 'TaskbarStats-Lite.exe'
 
 if (-not (Test-Path $src)) { throw "找不到源码：$src" }
 
@@ -86,19 +86,19 @@ if ($Probe) {
 
 # ---- 开机自启 ----
 if ($Startup) {
-    $lnk = Join-Path ([Environment]::GetFolderPath('Startup')) 'TaskbarStats.lnk'
+    $lnk = Join-Path ([Environment]::GetFolderPath('Startup')) 'TaskbarStats-Lite.lnk'
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($lnk)
     $shortcut.TargetPath = $out
     $shortcut.WorkingDirectory = $repoRoot
-    $shortcut.Description = '任务栏 CPU / 内存 实时监视'
+    $shortcut.Description = '任务栏 CPU / RAM / GPU 实时监视'
     $shortcut.Save()
     Write-Host ("已加入开机启动 : {0}" -f $lnk) -ForegroundColor Green
 }
 
 # ---- 启动 ----
 if ($Run) {
-    Get-Process -Name 'TaskbarStats' -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process -Name 'TaskbarStats-Lite' -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Process -FilePath $out
     Write-Host '已启动。退出方式：在任务栏文字上右键 -> 退出' -ForegroundColor Green
 }

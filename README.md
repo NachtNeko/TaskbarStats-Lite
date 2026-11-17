@@ -1,6 +1,6 @@
 <div align="center">
 
-# TaskbarStats
+# TaskbarStats-Lite
 
 **Windows 11 任务栏 CPU / RAM / GPU 实时监视**
 
@@ -63,7 +63,7 @@
 
 **方式一：直接运行**
 
-在Releases下载.exe文件，双击 `TaskbarStats.exe`，任务栏最左边就会出现指标。
+在Releases下载.exe文件，双击 `TaskbarStats-Lite.exe`，任务栏最左边就会出现指标。
 
 > 自己编译见 [从源码构建](#从源码构建)。
 
@@ -81,7 +81,7 @@ cd TaskbarStats-Lite
 |---|---|
 | **左键拖动** | 横向移动位置，松手后记住 |
 | **右键 → 显示样式** | 切换数字 / 环形 / 长条，当前项打勾，选择写入配置 |
-| **右键 → 开机自动启动** | 在启动文件夹写入 `.lnk`，不改注册表 |
+| **右键 → 开机自动启动** | 菜单项直接显示当前状态；点击后弹窗回报结果，失败会给出真实原因 |
 | **右键 → 重置到最左侧** | 位置归零 |
 | **右键 → 退出** | 结束程序 |
 | **再次双击 exe** | 已运行时不会启动第二个实例（互斥锁保护） |
@@ -99,7 +99,7 @@ cd TaskbarStats-Lite
 
 ## 配置文件
 
-位置：`%APPDATA%\TaskbarStats\settings.ini`
+位置：`%APPDATA%\TaskbarStats-Lite\settings.ini`
 
 ```ini
 offsetX=0
@@ -144,11 +144,21 @@ style=number
 离线自检（不开窗口，直接导出三种样式的真实渲染结果）：
 
 ```powershell
-.\TaskbarStats.exe --dump canvas
+.\TaskbarStats-Lite.exe --dump canvas
 # → canvas_preview.png  三种样式 × 深/浅底色的对照图
 # → canvas_alpha.png    带 alpha 通道的原始位图
 # → canvas_info.txt     各样式画布尺寸、墨水覆盖率、当前读数
 ```
+
+开机启动状态（不弹窗、不依赖 GUI）：
+
+```powershell
+.\TaskbarStats-Lite.exe --autostart status   # 只查询
+.\TaskbarStats-Lite.exe --autostart on       # 开启
+.\TaskbarStats-Lite.exe --autostart off      # 关闭
+```
+
+输出启动项路径、是否存在、指向目标、是否指向当前程序，同时写一份文本便于查看。
 
 ## 指标口径说明
 
@@ -168,7 +178,8 @@ style=number
    Windows 11 不支持把任务栏拖到屏幕左右两侧（除非借助第三方工具）。代码对左右侧停靠做了兜底排布，但未实测。
 
 3. **窗口占位是矩形**
-   分层窗口的命中区域是整个矩形，不按 alpha 挖空，所以图形周围那一片点击不会穿透。
+   分层窗口默认只把非透明像素交给鼠标，而字形覆盖率只有约 5%，所以整个矩形额外铺了一层
+   alpha=1（肉眼不可见）的底色，好让点哪都能拖动、右键。这是刻意为之，不是缺陷。
 
 4. **GPU 读数需要一点时间**
    PDH 是速率计数器，程序启动后第 1 个 tick 才有有效差值，首次显示可能短暂为 `--%`。
@@ -176,16 +187,18 @@ style=number
 ## 项目结构
 
 ```
-TaskbarStats/
+TaskbarStats-Lite/
 ├── .github/
 │   └── workflows/
 │       └── build.yml        # CI：windows-latest 上编译并自检
 ├── build.ps1                # 编译脚本（-Run / -Startup / -Probe）
 ├── src/
-│   ├── TaskbarStats.cs      # 全部源码，单文件
+│   ├── TaskbarStats-Lite.cs      # 全部源码，单文件
 │   └── app.manifest         # DPI 感知清单（permonitorv2），编译时内嵌
 ├── tools/
-│   └── Probe.cs             # 开发期验证探针（窗口几何 / 抓屏差分）
+│   ├── Probe.cs             # 开发期验证探针（窗口几何 / 抓屏差分）
+│   ├── HitTest.cs           # 鼠标命中探针（WindowFromPoint 逐点验证）
+│   └── MouseTest.cs         # 拖动逻辑探针（投递鼠标消息验证位移）
 ├── docs/
 │   ├── preview-styles.png
 │   └── canvas-alpha.png
@@ -197,7 +210,7 @@ TaskbarStats/
 ## 从源码构建
 
 ```powershell
-.\build.ps1              # 编译出 TaskbarStats.exe
+.\build.ps1              # 编译出 TaskbarStats-Lite.exe
 .\build.ps1 -Run         # 编译并立刻启动
 .\build.ps1 -Startup     # 编译并设为开机自启（写 .lnk 到启动文件夹）
 .\build.ps1 -Probe       # 编译后跑离线渲染自检，导出预览图
@@ -211,7 +224,7 @@ TaskbarStats/
 ```powershell
 C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /optimize+ `
   /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll `
-  /out:TaskbarStats.exe src\TaskbarStats.cs
+  /out:TaskbarStats-Lite.exe src\TaskbarStats-Lite.cs
 ```
 
 > **注意：** Windows 自带的 csc 只支持 **C# 5**，所以源码里不能用插值字符串、`?.`、
@@ -223,7 +236,7 @@ C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /optimize
 <summary><b>双击后什么都没发生？</b></summary>
 
 几乎都是**已经有一个实例在运行**——程序用互斥锁保证单实例，第二个会静默退出。
-先退出旧实例：在任务栏指标上**右键 → 退出**，或任务管理器里结束 `TaskbarStats.exe`，再启动。
+先退出旧实例：在任务栏指标上**右键 → 退出**，或任务管理器里结束 `TaskbarStats-Lite.exe`，再启动。
 </details>
 
 <details>
@@ -239,7 +252,7 @@ C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /optimize
 如果仍然发虚，先在新机器上跑诊断，把输出发我：
 
 ```powershell
-TaskbarStats.exe --info diag
+TaskbarStats-Lite.exe --info diag
 notepad diag_diag.txt
 ```
 
@@ -251,8 +264,8 @@ notepad diag_diag.txt
 对比不同缩放下的渲染效果：
 
 ```powershell
-TaskbarStats.exe --dump shot 96     # 模拟 100%
-TaskbarStats.exe --dump shot 144    # 模拟 150%
+TaskbarStats-Lite.exe --dump shot 96     # 模拟 100%
+TaskbarStats-Lite.exe --dump shot 144    # 模拟 150%
 ```
 </details>
 
@@ -271,8 +284,8 @@ Get-Counter -ListSet "GPU Engine" | Select-Object -ExpandProperty Counter
 <details>
 <summary><b>任务栏上看不到文字？</b></summary>
 
-1. 确认进程在跑：`Get-Process TaskbarStats`
-2. 看 `%APPDATA%\TaskbarStats\error.log` 有没有 `UpdateLayeredWindow failed`
+1. 确认进程在跑：`Get-Process TaskbarStats-Lite`
+2. 看 `%APPDATA%\TaskbarStats-Lite\error.log` 有没有 `UpdateLayeredWindow failed`
 3. 如果开着任务栏自动隐藏，任务栏收起来时浮窗也会跟着收起，这是预期行为
 </details>
 
