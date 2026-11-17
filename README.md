@@ -63,7 +63,7 @@
 
 **方式一：直接运行**
 
-在Releases下载.exe文件，双击 `TaskbarStats-Lite.exe`，任务栏最左边就会出现指标。
+在Releases下载最新的.exe文件，双击 `TaskbarStats-Lite.exe`，任务栏最左边就会出现指标。
 
 > 自己编译见 [从源码构建](#从源码构建)。
 
