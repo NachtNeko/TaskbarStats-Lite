@@ -63,16 +63,15 @@
 
 **方式一：直接运行**
 
-双击 `TaskbarStats.exe`，任务栏最左边就会出现指标。
+在Releases下载.exe文件，双击 `TaskbarStats.exe`，任务栏最左边就会出现指标。
 
-> 仓库里的 `.exe` 按 GitHub 惯例被 `.gitignore` 忽略，桌面上的 `TaskbarStats.exe` 是已编译版本。
 > 自己编译见 [从源码构建](#从源码构建)。
 
 **方式二：从源码编译**
 
 ```powershell
-git clone <this-repo> TaskbarStats
-cd TaskbarStats
+git clone <this-repo> TaskbarStats-Lite
+cd TaskbarStats-Lite
 .\build.ps1 -Run
 ```
 

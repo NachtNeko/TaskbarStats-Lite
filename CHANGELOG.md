@@ -35,4 +35,4 @@
 - GDI+ 输出直通 alpha，贴图前手动做预乘，消除抗锯齿边缘色晕。
 - 环形/长条与文字分两趟绘制，文字统一走遮罩通道。
 
-[1.0.0]: https://github.com/NachtNeko/TaskbarStats/releases/tag/v1.0.0
+[1.0.0]: https://github.com/NachtNeko/TaskbarStats-Lite/releases/tag/v1.0.0
